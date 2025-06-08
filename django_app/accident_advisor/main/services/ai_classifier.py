@@ -143,7 +143,7 @@ class TrafficAccidentClassifier:
     
     def process_precedent(self, user_input: str) -> str:
         """
-        판례 검색 및 분석 (OpenAI 임베딩 통일 방식)
+        Enhanced 판례 검색 (판례번호 정확성 검증 포함)
         
         Args:
             user_input (str): 사용자 질문
@@ -155,114 +155,25 @@ class TrafficAccidentClassifier:
         start_time = time.time()
         
         try:
-            logger.info(f"판례 검색 시작: '{user_input[:30]}...'")
+            logger.info(f"Enhanced 판례 검색 시작: '{user_input[:30]}...'")
             
-            # 1. VectorDB에서 precedent 컬렉션 가져오기
-            precedent_db = self.vector_db_manager.get_vector_db('precedent')
-            if not precedent_db:
-                logger.error("precedent VectorDB를 찾을 수 없습니다.")
-                return self._generate_precedent_fallback_response(user_input)
+            # Enhanced Precedent Processor 사용
+            from .enhanced_precedent_processor import EnhancedPrecedentProcessor
             
-            # 2. 메타데이터 필드 정의 (Self-Query Retriever용)
-            metadata_field_info = [
-                AttributeInfo(
-                    name=self.METADATA_KEY['PRECEDENT']['COURT'],
-                    description="판례의 법원명 (예: 대법원, 서울고등법원, 지방법원 등)",
-                    type="string"
-                ),
-                AttributeInfo(
-                    name=self.METADATA_KEY['PRECEDENT']['CASE_ID'],
-                    description="사건번호 (예: 92도2077, 2019다12345, 2015나60480 등)",
-                    type="string"
-                )
-            ]
-            
-            # 3. Self-Query Retriever 생성
-            self_retriever = SelfQueryRetriever.from_llm(
-                llm=self.gpt_4o_model,
-                vectorstore=precedent_db,
-                document_contents="교통사고 관련 법원 판례 데이터",
-                metadata_field_info=metadata_field_info
+            processor = EnhancedPrecedentProcessor(
+                vector_db_manager=self.vector_db_manager,
+                gpt_model=self.gpt_4o_model
             )
             
-            # 4. 판례 검색 및 분석 프롬프트 (개선된 사용자 친화적 포맷)
-            prompt = PromptTemplate(
-                input_variables=["question", "context"],
-                template="""
-너는 교통사고 판례를 요약 정리해주는 전문가야.
-
-아래 문서(context)를 참고하여 사용자의 질문에 대해 관련된 판례를 **간결하고 읽기 쉽게** 설명해줘.
-
----
-질문: {question}
-
-검색된 판례 문서:
-{context}
----
-
-출력 형식:
-
-⚖️ **판례 검색 결과**
-
-**🔍 검색 내용**: [사용자 질문 요약]
-
-**📋 관련 판례**:
-
-**1️⃣ [사건번호]**
-• **법원**: [법원명]
-• **사고 개요**: [사고 상황을 1-2줄로 간단히]
-• **주요 판단**: [핵심 법적 판단 1-2줄]
-• **과실비율**: [A차량 XX% vs B차량 XX%] *(명시된 경우만)*
-
-**2️⃣ [사건번호]**
-• **법원**: [법원명]
-• **사고 개요**: [사고 상황을 1-2줄로 간단히]
-• **주요 판단**: [핵심 법적 판단 1-2줄]
-• **과실비율**: [명시된 경우만 표시]
-
-*(최대 3-4개 판례만 표시)*
-
-**💡 참고사항**:
-- 구체적인 사고 상황에 따라 과실비율이 달라질 수 있습니다
-- 정확한 분석을 위해서는 상세한 사고 경위가 필요합니다
-
-**조건**:
-- 각 판례를 **명확히 구분**하여 표시하세요
-- **과실비율**은 명시된 경우만 표시하고, 없으면 생략하세요
-- **긴 내용은 1-2줄로 요약**하여 읽기 쉽게 하세요
-- 문서에 없는 정보는 임의로 만들지 마세요
-- 사건번호와 법원명을 **정확히** 표시하세요
-
-답변:
-"""            )
-            
-            # 5. QA 체인 구성 및 실행
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=self.gpt_4o_model,
-                retriever=self_retriever,   # 유사도 검색
-                chain_type="stuff",
-                chain_type_kwargs={"prompt": prompt}
-            )
-            
-            # 6. 검색 및 응답 생성 (로깅 추가)
-            retrieval_start = time.time()
-            
-            # 검색 결과 로깅 (디버깅용)
-            if logger.isEnabledFor(logging.INFO):
-                # 유사도 검색으로 상위 결과 확인
-                docs_with_scores = precedent_db.similarity_search_with_score(user_input, k=4)
-                logger.info(f"법률 검색 유사도: {[(doc.metadata.get('article_number', 'N/A'), f'{score:.3f}') for doc, score in docs_with_scores]}")
-            
-            result = qa_chain.invoke({"query": user_input})
-            retrieval_time = time.time() - retrieval_start
+            result = processor.process_precedent_query(user_input)
             
             total_time = time.time() - start_time
-            logger.info(f"판례 검색 완료: '{user_input[:30]}...' (검색: {retrieval_time:.2f}초, 총: {total_time:.2f}초)")
+            logger.info(f"Enhanced 판례 검색 완료: '{user_input[:30]}...' (총: {total_time:.2f}초)")
             
-            return result['result']
+            return result
             
         except Exception as e:
-            logger.error(f"판례 검색 중 오류: {str(e)}")
+            logger.error(f"Enhanced 판례 검색 중 오류: {str(e)}")
             return self._generate_precedent_fallback_response(user_input)
     
     def process_law(self, user_input: str) -> str:
@@ -281,7 +192,7 @@ class TrafficAccidentClassifier:
         try:
             logger.info(f"도로교통법 조회 시작: '{user_input[:30]}...'")
             
-            # 1. VectorDB에서 traffic_law_rag 컴렉션 가져오기
+            # 1. VectorDB에서 traffic_law_rag 컬렉션 가져오기
             law_db = self.vector_db_manager.get_vector_db('traffic_law_rag')
             if not law_db:
                 logger.error("traffic_law_rag VectorDB를 찾을 수 없습니다.")
@@ -402,6 +313,131 @@ class TrafficAccidentClassifier:
             logger.error(f"도로교통법 조회 중 오류: {str(e)}")
             return self._generate_law_fallback_response(user_input)
     
+    def process_accident(self, user_input: str) -> str:
+        """
+        교통사고 과실비율 분석 (RAG 기반)
+        Args:
+            user_input (str): 사용자 질문
+        Returns:
+            str: 과실비율 분석 결과
+        """
+        import time
+        start_time = time.time()
+        try:
+            logger.info(f"과실비율 분석 시작: '{user_input[:30]}...'")
+            # 1. VectorDB에서 car_case 컬렉션 가져오기
+            car_case_db = self.vector_db_manager.get_vector_db('car_case')
+            if not car_case_db:
+                logger.error("car_case VectorDB를 찾을 수 없습니다.")
+                return self._generate_accident_fallback_response(user_input)
+            # 2. 메타데이터 필드 정의 (Self-Query Retriever용)
+            metadata_field_info = [
+                AttributeInfo(
+                    name="case_type",
+                    description="사고 유형 (예: 교차로 좌회전 vs 직진, 주차장 후진 등)",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="main_situation",
+                    description="주요 상황 (예: 신호, 위치, 도로 상황 등)",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="base_ratio",
+                    description="기본 과실비율 (예: 80:20)",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="adjustment_factors",
+                    description="조정 요소 (예: 신호위반, 속도위반 등)",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="law_reference",
+                    description="관련 법규/판례",
+                    type="string"
+                )
+            ]
+            # 3. Self-Query Retriever 생성
+            self_retriever = SelfQueryRetriever.from_llm(
+                llm=self.gpt_4o_model,
+                vectorstore=car_case_db,
+                document_contents="교통사고 유형별 과실비율 데이터",
+                metadata_field_info=metadata_field_info,
+                search_kwargs={"k": 3}
+            )
+            # 4. 프롬프트 템플릿 정의 (PromptTemplate 객체로 생성)
+            prompt_template = PromptTemplate(
+                input_variables=["context", "question"],
+                template="""
+{context}
+
+아래의 정보를 바탕으로 교통사고 과실비율을 분석해 주세요.
+
+---
+출력 형식(아래 지침을 반드시 따르세요):
+
+1. **질문과 가장 관련성 높은 사고유형 1개만** 우선적으로 상세히 설명하세요.
+   - 만약 질문과 정확히 일치하는 사고유형이 데이터에 없다면,
+     "정확히 일치하는 사고유형이 데이터에 없어, 가장 유사한 사고유형의 과실비율을 안내합니다."라는 문구를 답변 맨 앞에 추가하세요.
+2. **여러 사고유형이 유사도가 비슷하게 높다면**, 각 사고유형을 아래와 같이 번호와 구분선(---)으로 명확히 구분해서 출력하세요.
+   - 각 사고유형별로 반드시 아래의 항목을 포함하세요(번호와 함께):
+     1. **사고유형**: [설명]
+        - **기본 과실비율**: [A차량 XX% vs B차량 XX%]
+        - **조정 요소**: [신호위반, 속도위반 등]
+        - **참고사항**: [특이사항, 주의점]
+        - **관련 법규/판례**: [링크/설명]
+   - "교통사고 과실비율 분석 결과"라는 문구는 각 사고유형마다 반복하지 마세요.
+3. **질문과의 관련성이 낮은 사고유형은 생략하거나, 맨 뒤에 간단히 요약만 하세요.**
+4. **문서에 없는 정보는 임의로 만들지 마세요.**
+5. **각 사고유형은 반드시 번호(1, 2, 3...)와 구분선(---)으로 구분하세요.**
+6. 마지막에는 위의 사고유형별 과실비율 데이터를 참고하여, 질문 상황에 가장 적합하다고 판단되는 **AI가 판단한 과실비율**을 한 줄로 명확하게 제시하세요.
+   - 예시: "**AI가 판단한 과실비율: A차량 60% vs B차량 40%**"
+   - 반드시 사고유형별 데이터를 근거로 판단하세요. 임의로 생성하지 마세요.
+   - 간단한 이유를 같이 설명해주세요
+
+---
+예시 출력:
+
+정확히 일치하는 사고유형이 데이터에 없어, 가장 유사한 사고유형의 과실비율을 안내합니다.
+
+1. **사고유형**: [설명]
+   - **기본 과실비율**: [A차량 XX% vs B차량 XX%]
+   - **조정 요소**: [신호위반, 속도위반 등]
+   - **참고사항**: [특이사항, 주의점]
+   - **관련 법규/판례**: [링크/설명]
+
+---
+
+2. **사고유형**: [설명]
+   - **기본 과실비율**: [A차량 XX% vs B차량 XX%]
+   - **조정 요소**: [신호위반, 속도위반 등]
+   - **참고사항**: [특이사항, 주의점]
+   - **관련 법규/판례**: [링크/설명]
+
+---
+
+**AI가 판단한 과실비율: A차량 60% vs B차량 40%**
+"""
+            )
+            # 5. QA 체인 구성 및 실행
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=self.gpt_4o_model,
+                retriever=self_retriever,
+                chain_type="stuff",
+                chain_type_kwargs={"prompt": prompt_template}
+            )
+            # 6. 검색 및 응답 생성
+            retrieval_start = time.time()
+            result = qa_chain.invoke({"query": user_input})
+            retrieval_time = time.time() - retrieval_start
+            total_time = time.time() - start_time
+            logger.info(f"과실비율 분석 완료: '{user_input[:30]}...' (검색: {retrieval_time:.2f}초, 총: {total_time:.2f}초)")
+            return result['result']
+        except Exception as e:
+            logger.error(f"과실비율 분석 중 오류: {str(e)}")
+            return self._generate_accident_fallback_response(user_input)
+    
     def process_user_query(self, user_input: str) -> tuple:
         """
         통합 처리 함수 (분류 + 카테고리별 처리)
@@ -422,9 +458,9 @@ class TrafficAccidentClassifier:
             elif category == 'law':
                 response = self.process_law(user_input)
             elif category == 'accident':
-                response = self._process_accident_placeholder(user_input)
+                response = self.process_accident(user_input)
             elif category == 'term':
-                response = self._process_term_placeholder(user_input)
+                response = self.process_term(user_input)
             else:  # general
                 response = self._process_general_placeholder(user_input)
             
@@ -587,56 +623,159 @@ class TrafficAccidentClassifier:
 
 **📞 도움이 필요하시면 다른 방식으로 질문해주세요!**"""
     
-    def _process_accident_placeholder(self, user_input: str) -> str:
-        """사고 분석 플레이스홀더 (향후 구현) - 개선된 포맷"""
-        return f"""🚗 **교통사고 분석 결과**
+    def process_term(self, user_input: str) -> str:
+        """
+        교통사고 관련 용어 설명 (RAG 기반)
+        
+        Args:
+            user_input (str): 사용자 질문
+            
+        Returns:
+            str: 용어 설명 결과
+        """
+        import time
+        start_time = time.time()
+        
+        try:
+            logger.info(f"용어 설명 시작: '{user_input[:30]}...'")
+            
+            # 1. VectorDB에서 term 컬렉션 가져오기
+            term_db = self.vector_db_manager.get_vector_db('term')
+            if not term_db:
+                logger.error("term VectorDB를 찾을 수 없습니다.")
+                return self._generate_term_fallback_response(user_input)
+            
+            # 2. 메타데이터 필드 정의 (Self-Query Retriever용)
+            metadata_field_info = [
+                AttributeInfo(
+                    name="term_category",
+                    description="용어 카테고리 (예: 법률용어, 사고유형, 도로시설 등)",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="related_terms",
+                    description="관련 용어들",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="law_reference",
+                    description="관련 법규 조문",
+                    type="string"
+                ),
+                AttributeInfo(
+                    name="precedent_reference",
+                    description="관련 판례",
+                    type="string"
+                )
+            ]
+            
+            # 3. Self-Query Retriever 생성
+            self_retriever = SelfQueryRetriever.from_llm(
+                llm=self.gpt_4o_model,
+                vectorstore=term_db,
+                document_contents="교통사고 관련 용어 및 정의 데이터",
+                metadata_field_info=metadata_field_info,
+                search_kwargs={"k": 3}
+            )
+            
+            # 4. 용어 설명 프롬프트
+            prompt = PromptTemplate(
+                input_variables=["question", "context"],
+                template="""
+너는 교통사고 관련 용어를 설명하는 전문가야.
 
-**🔍 분석 대상**: "{user_input}"
+아래 문서(context)를 참고하여 사용자의 질문에 대해 용어를 쉽게 설명해줘.
 
-**🔧 준비 중인 기능**
+---
+질문: {question}
 
-안녕하세요! 교통사고 과실비율 분석 기능을 개발 중입니다.
+검색된 용어 정보:
+{context}
+---
 
-**💡 곧 제공될 서비스**:
-• **과실비율 자동 계산** (A차량 XX% vs B차량 XX%)
-• **법적 근거 제시** (도로교통법 조문 + 판례)
-• **조정 요소 분석** (신호위반, 속도위반 등)
-• **상세한 사고 분석** 및 주의사항
+출력 형식:
 
-**📋 현재 이용 가능한 기능**:
-• ⚖️ **판례 검색** ✅ (완료)
-• 📚 **도로교통법 조회** ✅ (완료)
+📖 **용어 설명**
 
-**🎯 예시 질문**:
-• "대법원 2019다12345 판례 내용은?"
-• "교차로 좌회전 사고 판례 검색"
+**🔍 질문**: [사용자 질문]
 
-**빠른 시일 내에 교통사고 분석 기능을 제공해드리겠습니다!** 🚀"""
+**📚 용어 정의**:
+• **정의**: [용어의 정확한 정의]
+• **법적 근거**: [관련 법규]
+• **실무 적용**: [실무에서의 적용 방법]
+
+**💡 쉽게 설명**:
+[일반인이 이해하기 쉬운 설명]
+
+**🔗 관련 용어**:
+• [관련 용어 1]: [간단 설명]
+• [관련 용어 2]: [간단 설명]
+
+**📌 참고사항**:
+• [주의사항 1]
+• [주의사항 2]
+
+**조건**:
+- 전문 용어는 반드시 쉬운 언어로 풀어서 설명하세요
+- 법적 근거가 있다면 반드시 포함하세요
+- 관련 용어는 2-3개만 선택적으로 표시하세요
+- 문서에 없는 정보는 임의로 만들지 마세요
+- 사용자가 특정 용어를 물어봤다면, 해당 용어를 우선적으로 설명하세요
+
+답변:
+"""
+            )
+            
+            # 5. QA 체인 구성 및 실행
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=self.gpt_4o_model,
+                retriever=self_retriever,
+                chain_type="stuff",
+                chain_type_kwargs={"prompt": prompt}
+            )
+            
+            # 6. 검색 및 응답 생성
+            retrieval_start = time.time()
+            result = qa_chain.invoke({"query": user_input})
+            retrieval_time = time.time() - retrieval_start
+            
+            total_time = time.time() - start_time
+            logger.info(f"용어 설명 완료: '{user_input[:30]}...' (검색: {retrieval_time:.2f}초, 총: {total_time:.2f}초)")
+            
+            return result['result']
+            
+        except Exception as e:
+            logger.error(f"용어 설명 중 오류: {str(e)}")
+            return self._generate_term_fallback_response(user_input)
     
-    def _process_term_placeholder(self, user_input: str) -> str:
-        """용어 설명 플레이스홀더 (향후 구현) - 개선된 포맷"""
+    def _generate_term_fallback_response(self, user_input: str) -> str:
+        """용어 설명 실패 시 폴백 응답"""
         return f"""📖 **용어 설명 결과**
 
 **🔍 질문 내용**: "{user_input}"
 
-**🔧 준비 중인 기능**
+**⚠️ 일시적 오류 발생**
 
-교통사고 용어 설명 기능을 개발 중입니다.
+죄송합니다. 현재 용어 설명 시스템에 일시적인 문제가 발생했습니다.
 
-**💡 곧 제공될 서비스**:
-• **정확한 법적 정의** 제공
-• **쉬운 설명** 및 예시
-• **관련 용어** 연결
-• **실무에서의 적용** 사례
+**💡 다시 시도해 보세요**:
 
-**📋 현재 이용 가능한 기능**:
-• ⚖️ **판례 검색** ✅ (완료)
+**🎯 구체적인 용어로 검색**
+• "과실비율이란 무엇인가요?"
+• "신호위반의 정의는?"
+• "교차로 통행방법 설명해주세요"
 
-**🎯 예시 질문**:
-• "대법원 2019다12345 판례 내용은?"
-• "신호위반 관련 판례 검색"
+**🎯 카테고리별 검색**
+• "법률 용어: 과실이란?"
+• "사고 유형: 추돌사고란?"
+• "도로 시설: 교차로란?"
 
-**빠른 시일 내에 용어 설명 기능을 제공해드리겠습니다!** 📚"""
+**🎯 관련 용어 검색**
+• "과실비율과 관련된 용어들"
+• "신호위반 관련 용어"
+• "교차로 통행 관련 용어"
+
+**📞 도움이 필요하시면 다른 방식으로 질문해주세요!**"""
     
     def _process_general_placeholder(self, user_input: str) -> str:
         """일반 질문 플레이스홀더 - 개선된 포맷"""
@@ -683,6 +822,10 @@ class TrafficAccidentClassifier:
 **도움이 필요하시면 언제든 말씀해주세요!** 🙏
 
 *기술 정보: {error_msg}*"""
+    
+    def _generate_accident_fallback_response(self, user_input: str) -> str:
+        """과실비율 분석 실패 시 폴백 응답"""
+        return f"""🚗 **교통사고 과실비율 분석 결과**\n\n**🔍 질문 내용**: \"{user_input}\"\n\n**⚠️ 일시적 오류 발생**\n\n죄송합니다. 현재 과실비율 분석 시스템에 일시적인 문제가 발생했습니다.\n\n**💡 다시 시도해 보세요**:\n• 사고유형을 더 구체적으로 입력해 주세요 (예: 교차로 좌회전 vs 직진)\n• 신호, 위치, 도로 상황 등도 함께 입력해 주세요\n\n**📞 도움이 필요하시면 다른 방식으로 질문해주세요!**"""
     
     def get_classification_stats(self) -> Dict[str, Any]:
         """
